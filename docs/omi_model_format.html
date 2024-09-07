@@ -1,0 +1,162 @@
+<html>
+  <head>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
+    <script>hljs.highlightAll();</script>
+    <title>Single-File Format Proposal</title>
+  </head>
+
+  <body>
+    <h2>Overall Goal</h2>
+    <p>We currently have a proliferation of standards for distributing models, grown organically. This worked quite well in the days of small models with small text encoders (SD 1.5, SDXL). As both diffusion models and their accompanying text encoders have grown larger, however, we've started to hit problems. We have users that want to train individual pieces of the model, such as only the DiT of the SD3 model. This then leaves an open question of how to distribute the resulting trained piece. A single file that any UI can load is the most convenient form of such distribution. However, as of this moment, single files must include any corresponding text encoders (reaching 10+ gigabytes) for proper loading, even if they are untouched as part of the fine-tuning process. This is not a good long-term prospect.</p>
+
+    <p>The format that competes with single-file distribution is the Diffusers format. This represents a directory structure with the individual pieces of the model as different files. Splitting out the model like this is advantageous, but Diffusers format is not a panacea. You still have to distribute all the pieces of the model, even if you haven't modified them from their original forms. Furthermore, it is <i>not a single file</i>! It could be zipped up, but this is explicitly not part of the standard.</p>
+
+    <p>Thus, this document proposes a new standard for single-file model distribution going forward. None of the pieces here hold any technical challenge. The only difficulty is organizational: getting all inference frontends and trainers to agree on this format.</p>
+
+    <p>To aid with future compatibility, this standard also specifies a <b>key naming format</b> that implementing models will use. This key naming format is very simple: for full models, it is the naming that came with the original model. For derived models like LoRAs, the names have _omi appended. Further details are in the individual derived format sections. For the purposes of compatibility, OMI provides a reference implementation in Python for converting models between known key names in the wild. This implementation can be found under the namespace "omi.key_conversion".</p>
+
+    <h2>The Format: Full Models</h2>
+    <p>A model will be distributed as a single .safetensors file. It will have, contained in the metadata section of the file, the following JSON key:</p>
+    <pre><code class="language-json">
+"omi_data": {
+  "schema_version": 1,
+  // A pipeline lays out the type of model this file contains, and how to find
+  // each of the pieces. The pipeline is optional. If the file doesn't include
+  // a pipeline, the value of this key is null.
+  "pipeline": {
+    // The type comes from a pre-defined set of supported pipelines.
+    // See the list <a href="#pipelines">below</a>
+    "type": "SDXL",
+    "models": {
+      // Each value in this dictionary can be either an object (dict), or a string.
+      // An object means the model needs to be loaded from another file. A
+      // string means that the model is contained in this file, with details in
+      // the corresponding "models" object below.
+      "clip_l_tokenizer": {
+        "model_type": "CLIP_L/TOKENIZER",
+        // The file hash is the simplest possible way to locate a model piece.
+        // It is the raw hash of the entire file the piece is located in.
+        "file_hash": "sha256:0xdeadbeef",
+        // Optionally, other hashes can be specified. They are detailed in the
+        // <a href="#hashes">hashes</a> section below.
+        "hashes": {
+          "content_hash": "sha256:0x0000",
+          "similarity_hash": "sha256:0x0000"
+        }
+      },
+      "clip_l": "clip_l",
+      "unet": "sdxl_unet",
+      "clip_g_tokenizer": "...",
+      "clip_g": "...",
+      "vae": "..."
+    },
+    "info": {
+      // Optional, free-form object that can contain arbitrary data.
+    }
+  },
+  // A dictionary of models contained in this file. For example, the text
+  // encoder, tokenizer, or unet. The dictionary keys do not have any meaning;
+  // they are used only as references to the models in the "pipeline" dict above
+  // and as a prefix for tensor keys in this file.
+  "models": {
+    "clip_l": {
+      // The type is a name from a pre-defined set of supported models. This
+      // information is intended to be informative for the user.
+      "type": "CLIP_L/TEXT_ENCODER",
+      // Specifies the key layout of the model. Each model architecture has a
+      // single "default" key layout. Other key layouts are only added to support
+      // specific needs like quantization schemes that distribute a single
+      // parameter across multiple tensors.
+      // See <a href="#key_layout">below</a> for more details.
+      "key_layout": "default",
+      "data": {
+        // A structured object containing additional information about the model.
+        // Each model_type has a specific set of keys that can be defined here.
+        // Every key has a default value. If a key is not defined here, the
+        // default value is assumed. See <a href="#modeldata">model-specific data</a>
+        // for additional information.
+      },
+      // Several hashes can be defined on the model, for ease of use in
+      // frontends for locating and displaying choices to the user.
+      // See <a href="#hashes">hash types</a> for the full list and what each one
+      // means.
+      "hashes": {
+        "content_hash": "sha256:0xdeadbeef",
+        "similarity_hash": "sha256:0xdeadbeef"
+      },
+      // An optional structure that can contain arbitrary data. Intentionally
+      // not defined.
+      "info": {}
+    },
+    "sdxl_unet": {
+      "type": "SDXL/UNET",
+      "hashes": {
+        "content_hash": "sha256:0x0000",
+        "similarity_hash": "sha256:0x0000",
+      },
+      "data": {
+        // See <a href="#modeldata">model-specific data.</a>
+        "prediction_type": "eps",
+        "clip_l_layer": 2,
+        "clip_g_layer": 2,
+      }
+    }
+  }
+}
+    </code></pre>
+
+    <h2>Key Definitions</h2>
+
+    <h3><a name="pipelines">Pipeline Names</a></h3>
+    <p>A name that uniquely identifies the base type of the model. Each name specifies which components are listed under the models section. Current name/component mappings:</p>
+    <ul>
+      <li>SD1.5: clip_l, clip_l_tokenizer, unet, vae</li>
+      <li>SD2: clip_l_clip, clip_l_tokenizer, unet, vae</li>
+      <li>SDXL: clip_l, clip_l_tokenizer, clip_g, clip_g_tokenizer, unet, vae</li>
+      <li>SD3: clip_l, clip_l_tokenizer, clip_g, clip_g_tokenizer, t5_xxl, t5_xxl_tokenizer, transformer, vae</li>
+      <li>FLUX: clip, clip_l_tokenizer, t5_xxl, t5_xxl_tokenizer, transformer, vae</li>
+      <li>PIXART ALPHA: t5_xxl, t5_xxl_tokenizer, transformer, vae</li>
+      <li>PIXART SIGMA: t5_xxl, t5_xxl_tokenizer, transformer, vae</li>
+      <li>HUNYUAN DIT: t5_xxl, t5_xxl_tokenizer, transformer, vae</li>
+      <li>WUERSTCHEN 2: prior_clip_l, prior_clip_l_tokenizer, prior_prior, effnet_encoder, clip_l, clip_l_tokenizer, decoder, vqgan</li>
+      <li>STABLE CASCADE: prior_clip_l, prior_clip_l_tokenizer, prior_prior, effnet_encoder, clip_l, clip_l_tokenizer, decoder, vqgan</li>
+    </ul>
+
+    <h3><a name="hashes">Hashes</a></h3>
+    <p>Models in the pipeline section <b>must</b> include a file hash, which is a sha256 hash of the file in which the component can be found. This is the minimum necessary to allow a frontend to easily find a model piece that is not included directly in the file.</p>
+    <p>Optionally, additional hashes can be included to aid the frontend in the search for a possibly similar model. The names, and their algorithms, are described here. Reference code for calculating these is included in the OMI Python repository, under the name "omi.hashes".</p>
+
+    <h4>content_hash</h4>
+    <p>The content hash is defined by hashing the concatenation of the first 4 kilobytes (4096 byte) of every tensor in the model, or less if the tensor is smaller. The ordering of the concatenation is done key name in alphabetical order.</p>
+
+    <h4>similarity_hash</h4>
+    <p>The similarity_hash is currently undefined.</p>
+
+    <h3><a name="modeldata">Model-Specific Data</a></h3>
+    <p>Some models have data that define how they operate. The most obvious example is the clip text encoder skip layer, which is set to 2 by default in SDXL, but there are others. The following are defined by the standard.</p>
+
+    <h4>prediction_type</h4>
+    <p>This can be one of "eps", "v", or "x0". For most model types, it defaults to "eps", but for SD2 it defaults to "v". Any DDPM/DDIM model can have a prediction_type entry. At the time of this document that includes SD1.5, SD2, SDXL, PIXART_ALPHA, PIXART_SIGMA, and HUNYUAN_DIT.</p>
+
+    <h4>*_layer</h4>
+    <p>Where * is the name of a text encoder. The layer at which the output should be taken from text encoder. A number of "0" means the first layer, "1" second layer, and so on. If undefined, the model default will be used. This data element can be included in any model that takes a text encoder output as input.</p>
+
+    <h3><a name="key_layout">Key Layouts</a></h3>
+    <p>The following strings are specified for the key_format field:</p>
+    <ul>
+      <li>default: the default key layout for each model</li>
+      <li>
+        bnb_nf4: same as default, but the weight matrix of each linear layer is spread across 6 tensors.
+        A tensor with the original weight name and 5 additional tensors with the postfix ".absmax", ".nested_absmax", ".quant_map", ".nested_quant_map" and ".quant_state.bitsandbytes__nf4"
+      </li>
+      <li>bnb_int8: TBD</li>
+    </ul>
+
+    <p>This list will be added to if formats become used in the community. This list should not be seen as an endorsement of the quality of any of the quantization schemes in it.</p>
+
+    <h2>TODO</h2>
+    <p>Not done yet: PEFT formats, bundled embeddings.
+  </body>
+</html>
