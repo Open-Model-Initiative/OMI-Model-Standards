@@ -1,4 +1,6 @@
+from omi_model_standards.convert.lora.convert_clip import map_clip
 from omi_model_standards.convert.lora.convert_lora_util import LoraConversionKeySet, map_prefix_range
+from omi_model_standards.convert.lora.convert_t5 import map_t5
 
 
 def __map_double_transformer_block(key_prefix: LoraConversionKeySet) -> list[LoraConversionKeySet]:
@@ -62,28 +64,12 @@ def __map_transformer(key_prefix: LoraConversionKeySet) -> list[LoraConversionKe
     return keys
 
 
-def __map_clip(key_prefix: LoraConversionKeySet) -> list[LoraConversionKeySet]:
-    keys = []
-
-    keys += [LoraConversionKeySet("", "", parent=key_prefix)]
-
-    return keys
-
-
-def __map_t5(key_prefix: LoraConversionKeySet) -> list[LoraConversionKeySet]:
-    keys = []
-
-    keys += [LoraConversionKeySet("", "", parent=key_prefix)]
-
-    return keys
-
-
 def convert_flux_lora_key_sets() -> list[LoraConversionKeySet]:
     keys = []
 
     keys += [LoraConversionKeySet("bundle_emb", "bundle_emb")]
     keys += __map_transformer(LoraConversionKeySet("transformer", "lora_transformer"))
-    keys += __map_clip(LoraConversionKeySet("clip_l", "lora_te1"))
-    keys += __map_t5(LoraConversionKeySet("t5", "lora_te2"))
+    keys += map_clip(LoraConversionKeySet("clip_l", "lora_te1"))
+    keys += map_t5(LoraConversionKeySet("t5", "lora_te2"))
 
     return keys

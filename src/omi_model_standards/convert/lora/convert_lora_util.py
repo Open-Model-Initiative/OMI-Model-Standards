@@ -30,19 +30,27 @@ class LoraConversionKeySet:
         else:
             self.legacy_diffusers_prefix = legacy_diffusers_prefix
 
+        self.parent = parent
         self.swap_chunks = swap_chunks
         self.filter_is_last = filter_is_last
         self.prefix = parent
 
-        self.next_omi_prefix = next_omi_prefix
-        self.next_diffusers_prefix = next_diffusers_prefix
-        self.next_legacy_diffusers_prefix = next_diffusers_prefix.replace('.', '_') \
-            if next_diffusers_prefix is not None else None
-
         if next_omi_prefix is None and parent is not None:
             self.next_omi_prefix = parent.next_omi_prefix
-            self.next_diffusers_prefix = parent.diffusers_prefix
+            self.next_diffusers_prefix = parent.next_diffusers_prefix
             self.next_legacy_diffusers_prefix = parent.next_legacy_diffusers_prefix
+        elif next_omi_prefix is not None and parent is not None:
+            self.next_omi_prefix = combine(parent.omi_prefix, next_omi_prefix)
+            self.next_diffusers_prefix = combine(parent.diffusers_prefix, next_diffusers_prefix)
+            self.next_legacy_diffusers_prefix = combine(parent.legacy_diffusers_prefix, next_diffusers_prefix).replace('.', '_')
+        elif next_omi_prefix is not None and parent is None:
+            self.next_omi_prefix = next_omi_prefix
+            self.next_diffusers_prefix = next_diffusers_prefix
+            self.next_legacy_diffusers_prefix = next_diffusers_prefix.replace('.', '_')
+        else:
+            self.next_omi_prefix = None
+            self.next_diffusers_prefix = None
+            self.next_legacy_diffusers_prefix = None
 
     def __get_omi(self, in_prefix: str, key: str) -> str:
         return self.omi_prefix + key.removeprefix(in_prefix)
@@ -74,9 +82,9 @@ class LoraConversionKeySet:
 
 
 def combine(left: str, right: str) -> str:
-    if left == "":
+    if left == "" or left is None:
         return right
-    elif right == "":
+    elif right == "" or right is None:
         return left
     else:
         return left + "." + right
@@ -162,9 +170,9 @@ def __detect_source(
         for key_set in key_sets:
             if key.startswith(key_set.omi_prefix):
                 omi_count += 1
-            elif key.startswith(key_set.diffusers_prefix):
+            if key.startswith(key_set.diffusers_prefix):
                 diffusers_count += 1
-            elif key.startswith(key_set.legacy_diffusers_prefix):
+            if key.startswith(key_set.legacy_diffusers_prefix):
                 legacy_diffusers_count += 1
 
     if omi_count > diffusers_count and omi_count > legacy_diffusers_count:

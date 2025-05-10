@@ -1,3 +1,5 @@
+from omi_model_standards.convert.lora.convert_clip import map_clip
+from omi_model_standards.convert.lora.convert_llama import map_llama
 from omi_model_standards.convert.lora.convert_lora_util import LoraConversionKeySet, map_prefix_range
 
 
@@ -86,28 +88,12 @@ def __map_transformer(key_prefix: LoraConversionKeySet) -> list[LoraConversionKe
     return keys
 
 
-def __map_llama(key_prefix: LoraConversionKeySet) -> list[LoraConversionKeySet]:
-    keys = []
-
-    keys += [LoraConversionKeySet("language_model.model", "", parent=key_prefix)]
-
-    return keys
-
-
-def __map_clip(key_prefix: LoraConversionKeySet) -> list[LoraConversionKeySet]:
-    keys = []
-
-    keys += [LoraConversionKeySet("", "", parent=key_prefix)]
-
-    return keys
-
-
 def convert_hunyuan_video_lora_key_sets() -> list[LoraConversionKeySet]:
     keys = []
 
     keys += [LoraConversionKeySet("bundle_emb", "bundle_emb")]
     keys += __map_transformer(LoraConversionKeySet("transformer", "lora_transformer"))
-    keys += __map_llama(LoraConversionKeySet("llama", "lora_te1"))
-    keys += __map_clip(LoraConversionKeySet("clip_l", "lora_te2"))
+    keys += map_llama(LoraConversionKeySet("llama", "lora_te1"))
+    keys += map_clip(LoraConversionKeySet("clip_l", "lora_te2"))
 
     return keys

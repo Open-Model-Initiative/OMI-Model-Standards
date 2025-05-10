@@ -1,3 +1,4 @@
+from omi_model_standards.convert.lora.convert_clip import map_clip
 from omi_model_standards.convert.lora.convert_lora_util import LoraConversionKeySet, map_prefix_range
 
 
@@ -51,6 +52,6 @@ def convert_stable_cascade_lora_key_sets() -> list[LoraConversionKeySet]:
 
     keys += [LoraConversionKeySet("bundle_emb", "bundle_emb")]
     keys += __map_prior(LoraConversionKeySet( "unet", "lora_prior_unet"))
-    keys += [LoraConversionKeySet("clip_g", "lora_prior_te")]
+    keys += map_clip(LoraConversionKeySet("clip_g", "lora_prior_te"))
 
     return keys

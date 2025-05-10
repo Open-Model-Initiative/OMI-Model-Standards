@@ -1,4 +1,6 @@
+from omi_model_standards.convert.lora.convert_clip import map_clip
 from omi_model_standards.convert.lora.convert_lora_util import LoraConversionKeySet, map_prefix_range
+from omi_model_standards.convert.lora.convert_t5 import map_t5
 
 
 def __map_transformer_block(key_prefix: LoraConversionKeySet) -> list[LoraConversionKeySet]:
@@ -19,7 +21,7 @@ def __map_transformer_block(key_prefix: LoraConversionKeySet) -> list[LoraConver
     keys += [LoraConversionKeySet("x_block.adaLN_modulation.1", "norm1.linear", parent=key_prefix)]
 
     keys += [LoraConversionKeySet("context_block.adaLN_modulation.1", "norm1_context.linear", parent=key_prefix, filter_is_last=False)]
-    keys += [LoraConversionKeySet("context_block.adaLN_modulation.1", "norm1_context.linear", parent=key_prefix, swap_chunks=True, filter_is_last=False)]
+    keys += [LoraConversionKeySet("context_block.adaLN_modulation.1", "norm1_context.linear", parent=key_prefix, swap_chunks=True, filter_is_last=True)]
 
     keys += [LoraConversionKeySet("x_block.mlp.fc1", "ff.net.0.proj", parent=key_prefix)]
     keys += [LoraConversionKeySet("x_block.mlp.fc2", "ff.net.2", parent=key_prefix)]
@@ -59,8 +61,8 @@ def convert_sd3_lora_key_sets() -> list[LoraConversionKeySet]:
 
     keys += [LoraConversionKeySet("bundle_emb", "bundle_emb")]
     keys += __map_transformer(LoraConversionKeySet("transformer", "lora_transformer"))
-    keys += [LoraConversionKeySet("clip_l", "lora_te1")]
-    keys += [LoraConversionKeySet("clip_g", "lora_te2")]
-    keys += [LoraConversionKeySet("t5", "lora_te3")]
+    keys += map_clip(LoraConversionKeySet("clip_l", "lora_te1"))
+    keys += map_clip(LoraConversionKeySet("clip_g", "lora_te2"))
+    keys += map_t5(LoraConversionKeySet("t5", "lora_te3"))
 
     return keys
