@@ -82,6 +82,8 @@ class LoraConversionKeySet:
 
 
 def combine(left: str, right: str) -> str:
+    left = left.rstrip('.')
+    right = right.lstrip('.')
     if left == "" or left is None:
         return right
     elif right == "" or right is None:
