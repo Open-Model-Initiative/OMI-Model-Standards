@@ -1,162 +1,257 @@
 <html>
   <head>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
     <script>hljs.highlightAll();</script>
-    <title>Single-File Format Proposal</title>
+    <title>OMI Single-File Format & Key-Naming Proposal</title>
   </head>
 
   <body>
     <h2>Overall Goal</h2>
-    <p>We currently have a proliferation of standards for distributing models, grown organically. This worked quite well in the days of small models with small text encoders (SD 1.5, SDXL). As both diffusion models and their accompanying text encoders have grown larger, however, we've started to hit problems. We have users that want to train individual pieces of the model, such as only the DiT of the SD3 model. This then leaves an open question of how to distribute the resulting trained piece. A single file that any UI can load is the most convenient form of such distribution. However, as of this moment, single files must include any corresponding text encoders (reaching 10+ gigabytes) for proper loading, even if they are untouched as part of the fine-tuning process. This is not a good long-term prospect.</p>
+    <p>
+      We currently have a proliferation of ad-hoc standards for distributing models. This worked well
+      for small-scale diffusion (e.g. <code>sd1.5</code>), but as diffusion pipelines grow in size and complexity,
+      it has become unwieldy to handle new partial models (such as a single fine-tuned DiT or a LoRA adaptation).
+    </p>
 
-    <p>The format that competes with single-file distribution is the Diffusers format. This represents a directory structure with the individual pieces of the model as different files. Splitting out the model like this is advantageous, but Diffusers format is not a panacea. You still have to distribute all the pieces of the model, even if you haven't modified them from their original forms. Furthermore, it is <i>not a single file</i>! It could be zipped up, but this is explicitly not part of the standard.</p>
+    <p>
+      The <b>Open Model Initiative</b> (OMI) aims to streamline how we package and share both <i>full</i> models and
+      <i>derived</i> adapters such as LoRAs, textual inversions, etc. This document proposes:
+    </p>
+    <ul>
+      <li>A <b>single-file</b> distribution approach based on <code>.safetensors</code> with well-defined metadata.</li>
+      <li>A <b>standard key-naming convention</b>, preserving original (base) model parameter names wherever possible, so
+        that partial adapters (e.g. LoRAs) can reliably map to them.</li>
+      <li>A <b>reference conversion library</b> (<code>omi.key_conversion</code>) that can load known formats and
+        produce a valid OMI-format state dict (and vice versa), reducing the burden on frontends, trainers, and utilities.</li>
+    </ul>
 
-    <p>Thus, this document proposes a new standard for single-file model distribution going forward. None of the pieces here hold any technical challenge. The only difficulty is organizational: getting all inference frontends and trainers to agree on this format.</p>
+    <p>
+      In the future, we may collectively decide to adopt a true "packaged container" approach (like a zip with multiple
+      sub-files), but the immediate priority is to unify key naming and metadata so that models can be more reliably
+      shared in <code>.safetensors</code> format.
+    </p>
 
-    <p>To aid with future compatibility, this standard also specifies a <b>key naming format</b> that implementing models will use. This key naming format is very simple: for full models, it is the naming that came with the original model. For derived models like LoRAs, the names have _omi appended. Further details are in the individual derived format sections. For the purposes of compatibility, OMI provides a reference implementation in Python for converting models between known key names in the wild. This implementation can be found under the namespace "omi.key_conversion".</p>
+    <h2>File Format & Metadata</h2>
+    <p>
+      At the highest level, an OMI-compatible model is a single <code>.safetensors</code> file containing:
+    </p>
+    <ul>
+      <li>A <b>tensor dictionary</b> with parameter data.</li>
+      <li>A <b>metadata section</b> holding JSON under the <code>omi_data</code> key.</li>
+    </ul>
 
-    <h2>The Format: Full Models</h2>
-    <p>A model will be distributed as a single .safetensors file. It will have, contained in the metadata section of the file, the following JSON key:</p>
+    <p>
+      This is an example metadata payload for a full (multi-part) model. In practice, many partial adapters—like LoRAs—will
+      have fewer fields and different references.
+    </p>
+
     <pre><code class="language-json">
-"omi_data": {
-  "schema_version": 1,
-  // A pipeline lays out the type of model this file contains, and how to find
-  // each of the pieces. The pipeline is optional. If the file doesn't include
-  // a pipeline, the value of this key is null.
-  "pipeline": {
-    // The type comes from a pre-defined set of supported pipelines.
-    // See the list <a href="#pipelines">below</a>
-    "type": "SDXL",
-    "models": {
-      // Each value in this dictionary can be either an object (dict), or a string.
-      // An object means the model needs to be loaded from another file. A
-      // string means that the model is contained in this file, with details in
-      // the corresponding "models" object below.
-      "clip_l_tokenizer": {
-        "model_type": "CLIP_L/TOKENIZER",
-        // The file hash is the simplest possible way to locate a model piece.
-        // It is the raw hash of the entire file the piece is located in.
-        "file_hash": "sha256:0xdeadbeef",
-        // Optionally, other hashes can be specified. They are detailed in the
-        // <a href="#hashes">hashes</a> section below.
-        "hashes": {
-          "content_hash": "sha256:0x0000",
-          "similarity_hash": "sha256:0x0000"
-        }
+{
+  "omi_data": {
+    "schema_version": 1,
+
+    // Optional. Describes the pipeline and how each sub-model is referenced.
+    "pipeline": {
+      // The pipeline type is one of a pre-defined set (e.g. "SDXL", "SD1.5", etc.).
+      "type": "SDXL",
+
+      "models": {
+        // Each key identifies a component in the pipeline. The value can be
+        // a string referring to the sub-model in this file (below in "models"),
+        // or an object referencing an external file/URL by hash, if the component
+        // is *not* included in this safetensors.
+        "clip_l_tokenizer": {
+          "model_type": "CLIP_L/TOKENIZER",
+          "file_hash": "sha256:0xdeadbeef"
+        },
+        "clip_l": "clip_l",
+        "unet": "sdxl_unet",
+        "vae": "sdxl_vae",
+        "clip_g_tokenizer": "...",
+        "clip_g": "..."
       },
-      "clip_l": "clip_l",
-      "unet": "sdxl_unet",
-      "clip_g_tokenizer": "...",
-      "clip_g": "...",
-      "vae": "..."
-    },
-    "info": {
-      // Optional, free-form object that can contain arbitrary data.
-    }
-  },
-  // A dictionary of models contained in this file. For example, the text
-  // encoder, tokenizer, or unet. The dictionary keys do not have any meaning;
-  // they are used only as references to the models in the "pipeline" dict above
-  // and as a prefix for tensor keys in this file.
-  "models": {
-    "clip_l": {
-      // The type is a name from a pre-defined set of supported models. This
-      // information is intended to be informative for the user.
-      "type": "CLIP_L/TEXT_ENCODER",
-      // Specifies the key layout of the model. Each model architecture has a
-      // single "default" key layout. Other key layouts are only added to support
-      // specific needs like quantization schemes that distribute a single
-      // parameter across multiple tensors.
-      // See <a href="#key_layout">below</a> for more details.
-      "key_layout": "default",
-      "data": {
-        // A structured object containing additional information about the model.
-        // Each model_type has a specific set of keys that can be defined here.
-        // Every key has a default value. If a key is not defined here, the
-        // default value is assumed. See <a href="#modeldata">model-specific data</a>
-        // for additional information.
-      },
-      // Several hashes can be defined on the model, for ease of use in
-      // frontends for locating and displaying choices to the user.
-      // See <a href="#hashes">hash types</a> for the full list and what each one
-      // means.
-      "hashes": {
-        "content_hash": "sha256:0xdeadbeef",
-        "similarity_hash": "sha256:0xdeadbeef"
-      },
-      // An optional structure that can contain arbitrary data. Intentionally
-      // not defined.
+
+      // Optional free-form data about this pipeline.
       "info": {}
     },
-    "sdxl_unet": {
-      "type": "SDXL/UNET",
-      "hashes": {
-        "content_hash": "sha256:0x0000",
-        "similarity_hash": "sha256:0x0000",
+
+    // The "models" dict enumerates each sub-model that *is* contained in this file.
+    "models": {
+      "clip_l": {
+        "type": "CLIP_L/TEXT_ENCODER",
+        "key_layout": "default",
+        "hashes": {
+          "content_hash": "sha256:0xdeadbeef"
+        },
+        "data": {
+          // Optional data relevant to the sub-model. For instance:
+          // "clip_skip": 2, or "prediction_type": "v".
+        },
+        "info": {}
       },
-      "data": {
-        // See <a href="#modeldata">model-specific data.</a>
-        "prediction_type": "eps",
-        "clip_l_layer": 2,
-        "clip_g_layer": 2,
+      "sdxl_unet": {
+        "type": "SDXL/UNET",
+        "key_layout": "default",
+        "hashes": {
+          "content_hash": "sha256:0x0000"
+        },
+        "data": {
+          // E.g. "prediction_type": "eps"
+        },
+        "info": {}
+      },
+      "sdxl_vae": {
+        "type": "SDXL/VAE",
+        "key_layout": "default"
       }
     }
   }
 }
     </code></pre>
 
-    <h2>Key Definitions</h2>
+    <h2>Key-Naming Standard</h2>
+    <p>
+      The core principle is <b>use the original model author's parameter names</b>. This ensures that a derived model
+      referencing those weights (e.g., a LoRA) can easily match them. Historically, some libraries replaced dots (<code>.</code>)
+      with underscores (<code>_</code>) or split Q/K/V parameters differently. Going forward, we encourage:
+    </p>
 
-    <h3><a name="pipelines">Pipeline Names</a></h3>
-    <p>A name that uniquely identifies the base type of the model. Each name specifies which components are listed under the models section. Current name/component mappings:</p>
+    <ol>
+      <li><b>No forced replacement of <code>.</code> characters.</b> Keep them unless you have a strong architectural need.</li>
+      <li>If your model references multiple modules (e.g. <code>text_encoder</code> and <code>unet</code>) in the <i>same</i>
+          safetensors file, you may add a prefix to avoid collisions—e.g. <code>"unet.conv1.weight"</code> vs
+          <code>"text_encoder.embedding.weight"</code>. In your metadata’s <code>omi_data.models</code>, you would define something
+          like <code>"unet"</code> and all of that sub-model’s parameters are prefixed with <code>"unet."</code>.</li>
+      <li>For partial LoRAs or other adapters, <b>reference the underlying parameter name exactly</b>, then append your
+          LoRA suffix. See <a href="#lora-naming">LoRA Naming</a> below.</li>
+    </ol>
+
+    <p>
+      When distributing partial LoRAs or fine-tuned modules, the recommended approach is:
+    </p>
     <ul>
-      <li>SD1.5: clip_l, clip_l_tokenizer, unet, vae</li>
-      <li>SD2: clip_l_clip, clip_l_tokenizer, unet, vae</li>
-      <li>SDXL: clip_l, clip_l_tokenizer, clip_g, clip_g_tokenizer, unet, vae</li>
-      <li>SD3: clip_l, clip_l_tokenizer, clip_g, clip_g_tokenizer, t5_xxl, t5_xxl_tokenizer, transformer, vae</li>
-      <li>FLUX: clip, clip_l_tokenizer, t5_xxl, t5_xxl_tokenizer, transformer, vae</li>
-      <li>PIXART ALPHA: t5_xxl, t5_xxl_tokenizer, transformer, vae</li>
-      <li>PIXART SIGMA: t5_xxl, t5_xxl_tokenizer, transformer, vae</li>
-      <li>HUNYUAN DIT: t5_xxl, t5_xxl_tokenizer, transformer, vae</li>
-      <li>WUERSTCHEN 2: prior_clip_l, prior_clip_l_tokenizer, prior_prior, effnet_encoder, clip_l, clip_l_tokenizer, decoder, vqgan</li>
-      <li>STABLE CASCADE: prior_clip_l, prior_clip_l_tokenizer, prior_prior, effnet_encoder, clip_l, clip_l_tokenizer, decoder, vqgan</li>
-    </ul>
-
-    <h3><a name="hashes">Hashes</a></h3>
-    <p>Models in the pipeline section <b>must</b> include a file hash, which is a sha256 hash of the file in which the component can be found. This is the minimum necessary to allow a frontend to easily find a model piece that is not included directly in the file.</p>
-    <p>Optionally, additional hashes can be included to aid the frontend in the search for a possibly similar model. The names, and their algorithms, are described here. Reference code for calculating these is included in the OMI Python repository, under the name "omi.hashes".</p>
-
-    <h4>content_hash</h4>
-    <p>The content hash is defined by hashing the concatenation of the first 4 kilobytes (4096 byte) of every tensor in the model, or less if the tensor is smaller. The ordering of the concatenation is done key name in alphabetical order.</p>
-
-    <h4>similarity_hash</h4>
-    <p>The similarity_hash is currently undefined.</p>
-
-    <h3><a name="modeldata">Model-Specific Data</a></h3>
-    <p>Some models have data that define how they operate. The most obvious example is the clip text encoder skip layer, which is set to 2 by default in SDXL, but there are others. The following are defined by the standard.</p>
-
-    <h4>prediction_type</h4>
-    <p>This can be one of "eps", "v", or "x0". For most model types, it defaults to "eps", but for SD2 it defaults to "v". Any DDPM/DDIM model can have a prediction_type entry. At the time of this document that includes SD1.5, SD2, SDXL, PIXART_ALPHA, PIXART_SIGMA, and HUNYUAN_DIT.</p>
-
-    <h4>*_layer</h4>
-    <p>Where * is the name of a text encoder. The layer at which the output should be taken from text encoder. A number of "0" means the first layer, "1" second layer, and so on. If undefined, the model default will be used. This data element can be included in any model that takes a text encoder output as input.</p>
-
-    <h3><a name="key_layout">Key Layouts</a></h3>
-    <p>The following strings are specified for the key_format field:</p>
-    <ul>
-      <li>default: the default key layout for each model</li>
       <li>
-        bnb_nf4: same as default, but the weight matrix of each linear layer is spread across 6 tensors.
-        A tensor with the original weight name and 5 additional tensors with the postfix ".absmax", ".nested_absmax", ".quant_map", ".nested_quant_map" and ".quant_state.bitsandbytes__nf4"
+        <b>Maintain the original module’s param name</b>. Do not rename it. If you only changed a couple of weights,
+        just include those changed weights in your state dict. If you used LoRA, see the next section.
       </li>
-      <li>bnb_int8: TBD</li>
+      <li>
+        <b>Include minimal references</b> in your <code>omi_data</code> metadata to help a loader place these updated
+        weights in the correct location. If the rest of the base model is needed, a loader can reference the base
+        model by hash or path.
+      </li>
     </ul>
 
-    <p>This list will be added to if formats become used in the community. This list should not be seen as an endorsement of the quality of any of the quantization schemes in it.</p>
+    <h3><a name="lora-naming">LoRA Naming</a></h3>
+    <p>
+      For LoRA parameters, the recommended standard is:
+    </p>
+    <ul>
+      <li>
+        Use <code>original_key_name</code><b>.lora_down.weight</b>, <code>original_key_name</code><b>.lora_up.weight</b>,
+        and optionally <code>original_key_name</code><b>.alpha</b>.
+        <br />
+        Example:
+        <br />
+        <code>unet.down_blocks.0.attentions.0.transformer_blocks.0.attn.q_proj.lora_down.weight</code>
+      </li>
+      <li>
+        If a single safetensors file includes multiple modules (e.g., <code>unet</code> and <code>text_encoder</code>),
+        then each module may have a <code>unet.</code> or <code>text_encoder.</code> prefix, but <i>only</i> if the base
+        model’s parameters also use that prefix. In other words, the LoRA keys remain consistent with the base parameter
+        naming, plus the <code>.lora_down / .lora_up</code> suffix.
+      </li>
+      <li>
+        <b>No “global” replacement of <code>.</code> with <code>_</code></b>. We do not forcibly rename the original
+        architecture’s parameters. The only additions are the <code>.lora_down</code> / <code>.lora_up</code> suffixes.
+      </li>
+    </ul>
 
-    <h2>TODO</h2>
-    <p>Not done yet: PEFT formats, bundled embeddings.
+    <p>
+      This scheme preserves direct alignment with the underlying architecture. If your training code internally modifies
+      keys or splits Q/K/V into multiple parameters, you will need to convert them <i>back</i> to the “original model
+      keys” when saving for public distribution under the OMI standard.
+    </p>
+
+    <h2>Reference Conversion Library</h2>
+    <p>
+      Because there are already <i>many</i> LoRA and partial-model variants in the wild, OMI will maintain a reference
+      Python library <code>omi.key_conversion</code> that can:
+    </p>
+    <ul>
+      <li>Load known formats (Diffusers, older LoRA trainers, etc.).</li>
+      <li>Convert them to OMI’s recommended key layout.</li>
+      <li>(Optionally) Convert OMI-formatted safetensors back to one of those older formats.</li>
+    </ul>
+
+    <p>
+      This library only depends on PyTorch (for the <i>state_dict</i> reading/writing) and does not pull in large external
+      dependencies. Community submissions to extend coverage for additional formats (such as new architectures, or new
+      trainer quirks) are welcome. 
+    </p>
+
+    <p>
+      Note that this does <i>not</i> automatically alter the model’s architecture. If the original trainer’s approach
+      physically merges Q/K/V or otherwise changes shapes, a deeper transformation is required—the library includes some
+      known transformation logic, but not every custom approach is guaranteed support.
+    </p>
+
+    <h2>Format for Full vs. Partial Models</h2>
+    <p>
+      The examples above describe a full, multi-submodel pipeline in a single <code>.safetensors</code>. However, OMI is
+      equally applicable if you only want to distribute a single part (like a fine-tuned unet). In that case, you simply
+      omit references to other pipeline components in <code>omi_data</code>. A loader can then link up the missing pieces
+      from known base models, or load them from other <code>.safetensors</code> references by hash/path. 
+    </p>
+
+    <h2>Looking Ahead: Packaged Container Format</h2>
+    <p>
+      In the future, OMI may formalize a single-file “bundled directory” approach, which physically includes multiple
+      safetensors lumps (or multiple model shards) in one container file (akin to a zip or <code>dduf</code>).
+      That would remove the need for “prefix” naming entirely. However, for the <i>immediate</i> future, the community
+      consensus is to focus on:
+    </p>
+    <ol>
+      <li><b>Standardizing key names</b> to preserve direct architectural references.</li>
+      <li><b>Using  metadata</b> to specify pipeline structure and hashes.</li>
+    </ol>
+
+    <p>
+      Once these pieces gain wide adoption, we can tackle a more comprehensive container-based standard and coordinate
+      a broader ecosystem shift in tool support.
+    </p>
+
+    <h2>Hashing & Similarity</h2>
+    <p>
+      For <code>omi_data</code> references that point to external files, we recommend:
+    </p>
+    <ul>
+      <li><b>file_hash:</b> a required <code>sha256</code> of the entire external file. Allows direct file-matching.</li>
+      <li><b>content_hash:</b> an optional additional signature that can be used to identify near-duplicates if the file has
+        trivially changed. For example, OMI proposes hashing the first 4KB of each tensor (in alphabetical order of the keys).</li>
+    </ul>
+    <p>
+      These fields are flexible. Implementers can add more if desired, but
+      the recommended minimum is a single <code>sha256</code> for unambiguous referencing.
+    </p>
+
+    <h2>Conclusion</h2>
+    <p>
+      This proposal aims to solve the most pressing immediate problem: "parameter key mismatch" and "inconsistent naming"
+      that break cross-compatibility. By settling on:
+    </p>
+    <ul>
+      <li><b>Original model author keys</b> for base parameters.</li>
+      <li><b>Standard LoRA suffixes</b> (<code>.lora_down.weight</code>, <code>.lora_up.weight</code>, <code>.alpha</code>).</li>
+      <li><b>Simple metadata</b> in <code>.safetensors</code> (<code>omi_data</code>) to describe pipeline structure.</li>
+      <li><b>A reference Python library</b> for bridging old formats.</li>
+    </ul>
+    <p>
+      …we can drastically reduce confusion and duplication of loading logic in the ecosystem. 
+    </p>
+
+    <p><i>— The OMI Working Group</i></p>
   </body>
 </html>
