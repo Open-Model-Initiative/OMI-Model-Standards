@@ -24,6 +24,8 @@ pixart_sigma_lora = 'pixart-sigma/lora'
 flux_dev_1_lora = 'Flux.1-dev/lora'
 flux_fill_dev_1_lora = 'Flux.1-fill-dev/lora'
 
+chroma_1_lora = 'Chroma1/lora'
+
 sana_lora = 'sana/lora'
 
 hunyuan_video_lora = 'hunyuan-video/lora'
